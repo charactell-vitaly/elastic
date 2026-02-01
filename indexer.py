@@ -54,7 +54,9 @@ def setup_index(es):
 
 def fetch_parallel_wikipedia_pages(languages=["en", "he", "ar"]):
     """Fetch parallel subjects across multiple languages to ensure ground truth."""
-    wiki_clients = {lang: wikipediaapi.Wikipedia(user_agent='ScaleDemo/1.0', language=lang) for lang in languages}
+    # Using a more descriptive User-Agent as per Wikipedia policy
+    ua = 'MultilingualSemanticSearchDemo/1.0 (https://github.com/charactell-vitaly/elastic; contact: vitaly@example.com)'
+    wiki_clients = {lang: wikipediaapi.Wikipedia(user_agent=ua, language=lang) for lang in languages}
     en_wiki = wiki_clients['en']
     
     # Core evaluation subjects (Ground Truth)
@@ -71,16 +73,17 @@ def fetch_parallel_wikipedia_pages(languages=["en", "he", "ar"]):
     ]
     
     pages_to_index = []
-    print(f"Starting parallel fetching for {len(subjects)} subjects across {languages}...")
+    print(f"Starting sequential parallel fetching for {len(subjects)} subjects across {languages}...")
     
-    def get_parallel_for_subject(en_title):
-        subject_pages = []
-        # Robust retry logic for Wikipedia API
-        for attempt in range(3):
+    for en_title in subjects:
+        # Exponential backoff retry logic
+        success = False
+        for attempt in range(4):
             try:
                 en_page = en_wiki.page(en_title)
                 if not en_page.exists():
-                    return None
+                    print(f" ! English subject '{en_title}' does not exist. Skipping.")
+                    break
                 
                 # Map of language to title for this subject
                 lang_map = {'en': en_title}
@@ -89,37 +92,35 @@ def fetch_parallel_wikipedia_pages(languages=["en", "he", "ar"]):
                     if lang != 'en' and lang in langlinks:
                         lang_map[lang] = langlinks[lang].title
                 
+                subject_pages = []
                 # Fetch content for all available languages for this subject
                 for lang, title in lang_map.items():
                     p = wiki_clients[lang].page(title)
                     if p.exists():
                         subject_pages.append({
                             "title": p.title,
-                            "original_title": en_title, # Ground truth link
+                            "original_title": en_title,
                             "url": p.fullurl,
                             "content": p.summary[:5000].strip(),
                             "language": lang,
                             "category": "Parallel Ground Truth"
                         })
-                # Add a small delay between subjects to avoid rate limits
-                time.sleep(0.5)
-                return subject_pages
+                    time.sleep(0.2) # Throttling within subject
+                
+                pages_to_index.extend(subject_pages)
+                print(f" + Gathered: {en_title} ({len(subject_pages)} languages)")
+                success = True
+                break
             except Exception as e:
-                if attempt < 2:
-                    print(f"Retry {attempt+1} for {en_title} due to: {e}")
-                    time.sleep(2 * (attempt + 1))
-                    continue
+                wait_time = (2 ** attempt) + 1
+                if attempt < 3:
+                    print(f" ? Rate limit/error for '{en_title}' (Attempt {attempt+1}). Retrying in {wait_time}s... Error: {e}")
+                    time.sleep(wait_time)
                 else:
-                    print(f"Failed {en_title} after 3 attempts: {e}")
-                    return None
-        return None
-
-    with ThreadPoolExecutor(max_workers=5) as executor: # Reduced from 10
-        results = list(executor.map(get_parallel_for_subject, subjects))
-        for res in results:
-            if res:
-                pages_to_index.extend(res)
-                print(f" - Progress: {len(pages_to_index)} pages gathered (Subject: {res[0]['original_title']})")
+                    print(f" x Failed '{en_title}' after multiple attempts. Error: {e}")
+        
+        # Consistent delay between different subjects
+        time.sleep(0.5)
                 
     return pages_to_index
     
@@ -132,12 +133,12 @@ def main():
     # 1. Parallel Ground Truth (Approx 130-150 pages)
     all_pages = fetch_parallel_wikipedia_pages(languages=["en", "he", "ar"])
     
-    # 2. Add "Background Noise" (Approx 300 more pages)
-    # We'll fetch random pages from these languages to fill the volume
+    # 2. Add "Background Noise" (Approx 150-200 more pages)
     print("\nGathering background noise (random articles)...")
-    wiki_en = wikipediaapi.Wikipedia(user_agent='ScaleDemo/1.0', language='en')
-    wiki_he = wikipediaapi.Wikipedia(user_agent='ScaleDemo/1.0', language='he')
-    wiki_ar = wikipediaapi.Wikipedia(user_agent='ScaleDemo/1.0', language='ar')
+    ua = 'MultilingualSemanticSearchDemo/1.0 (https://github.com/charactell-vitaly/elastic; contact: vitaly@example.com)'
+    wiki_en = wikipediaapi.Wikipedia(user_agent=ua, language='en')
+    wiki_he = wikipediaapi.Wikipedia(user_agent=ua, language='he')
+    wiki_ar = wikipediaapi.Wikipedia(user_agent=ua, language='ar')
     
     def fetch_noise_batch(wiki, lang, count=50):
         noise = []
@@ -172,9 +173,11 @@ def main():
                             "category": "Background Noise"
                         })
                         fetched += 1
+                    time.sleep(0.3) # Throttling within link iteration
             except Exception:
                 continue
             if fetched >= count: break
+            time.sleep(0.5) # Throttling between seeds
         return noise
 
     with ThreadPoolExecutor(max_workers=3) as executor:
