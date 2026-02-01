@@ -52,130 +52,76 @@ def setup_index(es):
     es.indices.create(index=INDEX_NAME, body=mapping)
     print(f"Created index: {INDEX_NAME} with semantic_text")
 
-def fetch_wikipedia_pages(lang, count=100):
-    """Fetch 'count' pages from Wikipedia in specific language."""
-    wiki = wikipediaapi.Wikipedia(
-        user_agent='ElasticSearchScaleDemo/1.0',
-        language=lang
-    )
+def fetch_parallel_wikipedia_pages(languages=["en", "he", "ar"]):
+    """Fetch parallel subjects across multiple languages to ensure ground truth."""
+    wiki_clients = {lang: wikipediaapi.Wikipedia(user_agent='ScaleDemo/1.0', language=lang) for lang in languages}
+    en_wiki = wiki_clients['en']
     
-    # PARALLEL TOPICS: Same subjects in all languages for relevance testing
-    parallel_topics = {
-        "History": ["Jerusalem", "World War II", "French Revolution", "Ancient Egypt", "Empire of Japan", "Ottoman Empire", "Renaissance", "Industrial Revolution", "Cold War", "Maya civilization"],
-        "Science": ["Albert Einstein", "Climate change", "DNA", "Solar System", "Quantum mechanics", "Photosynthesis", "Black hole", "Evolution", "Periodic table", "General relativity"],
-        "Technology": ["Artificial intelligence", "World Wide Web", "Blockchain", "SpaceX", "Nuclear power", "Smartphones", "Cloud computing", "Cryptography", "Internet of things", "Virtual reality"],
-        "Geography": ["Mount Everest", "Amazon River", "Sahara", "Pacific Ocean", "Antarctica", "Great Barrier Reef", "Grand Canyon", "Alps", "Dead Sea", "Nile"],
-        "Culture": ["Leonardo da Vinci", "William Shakespeare", "Ludwig van Beethoven", "Olympics", "Impressionism", "Jazz", "Socrates", "Gothic architecture", "Mythology", "Cinema"],
-        "Space": ["Moon", "Mars", "Big Bang", "Galaxies", "International Space Station", "Black holes", "Hubble Space Telescope", "Astronaut", "Exoplanets", "Milky Way"],
-        "Biology": ["Neurons", "Bacteria", "Viruses", "Human genome", "Heart", "Lungs", "Plant cells", "DNA replication", "Microbiology", "Ecosystem"],
-        "Physics": ["Thermodynamics", "Electromagnetism", "Newton's laws of motion", "Gravity", "String theory", "Higgs boson", "Lightwaves", "Atomic nucleus", "Fluid dynamics", "Relativity"]
-    }
+    # Core evaluation subjects (Ground Truth)
+    subjects = [
+        "Albert Einstein", "Jerusalem", "DNA", "Solar System", "Quantum mechanics",
+        "Artificial intelligence", "World Wide Web", "Climate change", "Leonardo da Vinci",
+        "William Shakespeare", "Olympics", "Ancient Egypt", "Empire of Japan", "French Revolution",
+        "Black hole", "Evolution", "Photosynthesis", "Blockchain", "SpaceX", "Nuclear power",
+        "Mount Everest", "Amazon River", "Sahara", "Pacific Ocean", "Antarctica",
+        "Ludwig van Beethoven", "Socrates", "Gothic architecture", "Mythology", "Cinema",
+        "Moon", "Mars", "Big Bang", "Galaxies", "International Space Station",
+        "Bacteria", "Viruses", "Human genome", "Heart", "Ecosystem",
+        "Thermodynamics", "Electromagnetism", "Gravity", "String theory", "Higgs boson"
+    ]
     
-    pages_to_fetch = []
-    print(f"Gathering parallel topics for {lang}...")
-
-    def process_title(english_title, category):
-        try:
-            en_wiki = wikipediaapi.Wikipedia(user_agent='ElasticSearchScaleDemo/1.0', language='en')
-            en_page = en_wiki.page(english_title)
-            
-            target_title = english_title
-            if lang != 'en' and en_page.exists():
-                lang_links = en_page.langlinks
-                if lang in lang_links:
-                    target_title = lang_links[lang].title
-            
-            p = wiki.page(target_title)
-            if p.exists():
-                return {
-                    "title": p.title,
-                    "url": p.fullurl,
-                    "content": p.summary[:5000].strip(),
-                    "language": lang,
-                    "category": category
-                }
-        except Exception:
-            pass
+    pages_to_index = []
+    print(f"Starting parallel fetching for {len(subjects)} subjects across {languages}...")
+    
+    def get_parallel_for_subject(en_title):
+        subject_pages = []
+        # Robust retry logic for Wikipedia API
+        for attempt in range(3):
+            try:
+                en_page = en_wiki.page(en_title)
+                if not en_page.exists():
+                    return None
+                
+                # Map of language to title for this subject
+                lang_map = {'en': en_title}
+                langlinks = en_page.langlinks
+                for lang in languages:
+                    if lang != 'en' and lang in langlinks:
+                        lang_map[lang] = langlinks[lang].title
+                
+                # Fetch content for all available languages for this subject
+                for lang, title in lang_map.items():
+                    p = wiki_clients[lang].page(title)
+                    if p.exists():
+                        subject_pages.append({
+                            "title": p.title,
+                            "original_title": en_title, # Ground truth link
+                            "url": p.fullurl,
+                            "content": p.summary[:5000].strip(),
+                            "language": lang,
+                            "category": "Parallel Ground Truth"
+                        })
+                # Add a small delay between subjects to avoid rate limits
+                time.sleep(0.5)
+                return subject_pages
+            except Exception as e:
+                if attempt < 2:
+                    print(f"Retry {attempt+1} for {en_title} due to: {e}")
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                else:
+                    print(f"Failed {en_title} after 3 attempts: {e}")
+                    return None
         return None
 
-    # Step 1: Process Parallel Topics in parallel
-    topics_list = []
-    for category, titles in parallel_topics.items():
-        for t in titles:
-            topics_list.append((t, category))
-
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        results = list(executor.map(lambda x: process_title(x[0], x[1]), topics_list))
+    with ThreadPoolExecutor(max_workers=5) as executor: # Reduced from 10
+        results = list(executor.map(get_parallel_for_subject, subjects))
         for res in results:
-            if res and len(pages_to_fetch) < count:
-                pages_to_fetch.append(res)
-                print(f" - Fetched [{lang}]: {len(pages_to_fetch)} pages")
-
-    # Step 2: Fill remaining with broad categories (Parallelized)
-    if len(pages_to_fetch) < count:
-        print(f"Filling remaining slots for {lang} using broad categories...")
-        search_queries = {
-            "en": ["Life", "World", "Society", "Thought", "Human", "Environment", "Language", "Mathematics", "Physical_sciences", "Applied_sciences", "Social_sciences", "Health", "Leisure", "Arts", "Biography", "History", "Geography", "Technology", "Science", "Politics"],
-            "he": ["חיים", "עולם", "חברה", "מחשבה", "אדם", "סביבה", "שפה", "מתמטיקה", "מדעי_הטבע", "מדעים_יישומיים", "מדעי_החברה", "בריאות", "פנאי", "אמנות", "ביוגרפיה", "היסטוריה", "גאוגרפיה", "טכנולוגיה", "מדע", "פוליטיקה"],
-            "ar": ["حياة", "علم", "مجتمع", "فكر", "إنسان", "بيئة", "لغة", "رياضيات", "علوم_طبيعية", "علوم_تطبيقية", "علوم_اجتماعية", "صحة", "ترفיה", "فنون", "سيرة_ذاتية", "تاريخ", "جغرافيا", "تكنولوجيا", "علوم", "سياسة"]
-        }
-        
-        def get_category_members_recursive(cat, members_dict, depth=0, max_depth=1):
-            if depth > max_depth: return
-            try:
-                # Limit to 500 per category to prevent infinite bloat
-                for m in list(cat.categorymembers.values())[:500]:
-                    if m.ns == wikipediaapi.Namespace.MAIN:
-                        if m.title not in members_dict:
-                            members_dict[m.title] = query
-                    elif m.ns == wikipediaapi.Namespace.CATEGORY:
-                        # Recursive call
-                        get_category_members_recursive(m, members_dict, depth + 1, max_depth)
-            except Exception:
-                pass
-
-        needed = count - len(pages_to_fetch)
-        members_dict = {}
-        for query in search_queries.get(lang, []):
-            try:
-                cat = wiki.page(f"Category:{query}")
-                # Retry loop
-                for _ in range(3):
-                    try:
-                        if cat.exists():
-                            get_category_members_recursive(cat, members_dict, 0, 2) # Depth 2
-                        break
-                    except Exception:
-                        time.sleep(1)
-            except Exception:
-                pass
-            if len(members_dict) >= needed * 1.5: break
-
-        category_pages = list(members_dict.items())[:needed*2]
-
-        def fetch_basic(title, category):
-            try:
-                p = wiki.page(title)
-                if p.exists():
-                    return {
-                        "title": p.title,
-                        "url": p.fullurl,
-                        "content": p.summary[:5000].strip(),
-                        "language": lang,
-                        "category": category
-                    }
-            except Exception:
-                pass
-            return None
-
-        with ThreadPoolExecutor(max_workers=5) as executor: # Reduced workers
-            cat_results = list(executor.map(lambda x: fetch_basic(x[0], x[1]), category_pages))
-            for res in cat_results:
-                if res and len(pages_to_fetch) < count:
-                    if res['title'] not in [pg['title'] for pg in pages_to_fetch]:
-                        pages_to_fetch.append(res)
-                        if len(pages_to_fetch) % 10 == 0:
-                            print(f" - Fetched [{lang}]: {len(pages_to_fetch)} pages")
+            if res:
+                pages_to_index.extend(res)
+                print(f" - Progress: {len(pages_to_index)} pages gathered (Subject: {res[0]['original_title']})")
+                
+    return pages_to_index
     
     return pages_to_fetch[:count]
 
@@ -183,14 +129,60 @@ def main():
     es = get_es_client()
     setup_index(es)
     
-    languages = ["en", "he", "ar"]
-    all_pages = []
+    # 1. Parallel Ground Truth (Approx 130-150 pages)
+    all_pages = fetch_parallel_wikipedia_pages(languages=["en", "he", "ar"])
     
-    for lang in languages:
-        pages = fetch_wikipedia_pages(lang, count=500) # Aim for 500 per lang (1500 total)
-        all_pages.extend(pages)
+    # 2. Add "Background Noise" (Approx 300 more pages)
+    # We'll fetch random pages from these languages to fill the volume
+    print("\nGathering background noise (random articles)...")
+    wiki_en = wikipediaapi.Wikipedia(user_agent='ScaleDemo/1.0', language='en')
+    wiki_he = wikipediaapi.Wikipedia(user_agent='ScaleDemo/1.0', language='he')
+    wiki_ar = wikipediaapi.Wikipedia(user_agent='ScaleDemo/1.0', language='ar')
     
-    print(f"Total pages to index: {len(all_pages)}")
+    def fetch_noise_batch(wiki, lang, count=50):
+        noise = []
+        # Use simple common words or broad categories
+        seeds = ["Earth", "History", "Science", "Technology", "World", "Society"] if lang == 'en' else \
+                ["כדור_הארץ", "היסטוריה", "מדע", "טכנולוגיה", "עולם", "חברה"] if lang == 'he' else \
+                ["الأرض", "تاریخ", "علوم", "تكنولوجيا", "عالم", "مجتمع"]
+        
+        fetched = 0
+        for seed in seeds:
+            try:
+                p = wiki.page(seed)
+                if p.exists():
+                    noise.append({
+                        "title": p.title,
+                        "url": p.fullurl,
+                        "content": p.summary[:5000].strip(),
+                        "language": lang,
+                        "category": "Background Noise"
+                    })
+                    fetched += 1
+                # Try sub-pages or links for more variety
+                for link_title in list(p.links.keys())[:count]:
+                    if fetched >= count: break
+                    lp = wiki.page(link_title)
+                    if lp.exists():
+                        noise.append({
+                            "title": lp.title,
+                            "url": lp.fullurl,
+                            "content": lp.summary[:5000].strip(),
+                            "language": lang,
+                            "category": "Background Noise"
+                        })
+                        fetched += 1
+            except Exception:
+                continue
+            if fetched >= count: break
+        return noise
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        noise_results = list(executor.map(lambda x: fetch_noise_batch(x[0], x[1], 50), [(wiki_en, "en"), (wiki_he, "he"), (wiki_ar, "ar")]))
+        for batch in noise_results:
+            all_pages.extend(batch)
+    
+    print(f"\nTotal pages to index: {len(all_pages)}")
     
     print("Performing bulk indexing...")
     actions = [
@@ -202,12 +194,11 @@ def main():
     ]
     
     try:
+        # Use a small chunk size to avoid payload limits
         success, failed = helpers.bulk(es, actions, stats_only=False, chunk_size=10, raise_on_error=False)
         print(f"Successfully indexed {success} documents.")
         if failed:
             print(f"Failed to index {len(failed)} documents.")
-            for i, error in enumerate(failed[:5]): # Show first 5 errors
-                print(f" - Error {i+1}: {error}")
     except Exception as e:
         print(f"Critical error during bulk: {e}")
 
