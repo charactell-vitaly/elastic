@@ -208,17 +208,13 @@ HTML_TEMPLATE = """
 <body>
     <aside>
         <div class="filter-section">
-            <div class="section-title">🔍 Relevance Tester</div>
-            <div class="filter-group">
-                <p style="font-size: 0.75rem; color: var(--text-dim); margin-bottom: 5px;">Cross-Lingual Benchmarks:</p>
-                <button class="test-btn" onclick="runTest('Who is Albert Einstein?')">EN → HE/AR: Albert Einstein</button>
-                <button class="test-btn" onclick="runTest('ما هو نظامنا השמש?')">AR/HE Mix → Solar System</button>
-                <button class="test-btn" onclick="runTest('History of sacred cities in Middle East')">Context → Jerusalem</button>
-                <button class="test-btn" onclick="runTest('Impact of global warming')">Science → Climate Change</button>
-                <button class="test-btn" onclick="runTest('מי המציא את האינטרנט?')">HE → EN: Internet Inventor</button>
+            <div class="section-title">📊 Content Types</div>
+            <div class="filter-group" id="category-filter">
+                <div class="filter-item active" onclick="setCat(null, this)">All Content</div>
+                <div class="filter-item" onclick="setCat('Parallel Ground Truth', this)">Ground Truth (Parallel)</div>
+                <div class="filter-item" onclick="setCat('Background Noise', this)">Background Noise</div>
             </div>
         </div>
-
         <div class="filter-section">
             <div class="section-title">🌍 Languages</div>
             <div class="filter-group">
@@ -229,17 +225,6 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <div class="filter-section">
-            <div class="section-title">📂 Categories</div>
-            <div class="filter-group" id="category-filter">
-                <div class="filter-item active" onclick="setCat(null, this)">All Topics</div>
-                <div class="filter-item" onclick="setCat('Geography', this)">Geography</div>
-                <div class="filter-item" onclick="setCat('History', this)">History</div>
-                <div class="filter-item" onclick="setCat('Science', this)">Science</div>
-                <div class="filter-item" onclick="setCat('Technology', this)">Technology</div>
-                <div class="filter-item" onclick="setCat('Culture', this)">Culture</div>
-            </div>
-        </div>
     </aside>
 
     <main>

@@ -42,6 +42,7 @@ def setup_index(es):
                 "url": {"type": "keyword"},
                 "language": {"type": "keyword"},
                 "category": {"type": "keyword"},
+                "original_title": {"type": "text"}, # For cross-lingual keyword matching
                 "content": {
                     "type": "semantic_text",
                     "inference_id": INFERENCE_ID
@@ -123,8 +124,6 @@ def fetch_parallel_wikipedia_pages(languages=["en", "he", "ar"]):
         time.sleep(0.5)
                 
     return pages_to_index
-    
-    return pages_to_fetch[:count]
 
 def main():
     es = get_es_client()
