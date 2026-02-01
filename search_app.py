@@ -416,4 +416,4 @@ def search_api():
 
 if __name__ == "__main__":
     # Binding to 0.0.0.0 allows access from other machines on the same network
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=5075)
