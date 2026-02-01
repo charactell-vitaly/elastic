@@ -362,43 +362,51 @@ def search_api():
     lang_filter = data.get('lang')
     cat_filter = data.get('cat')
 
-    # Pure Semantic query using E5
-    search_query = {
-        "semantic": {
-            "field": "content",
-            "query": query_text if query_text else "*" 
-        }
-    }
-
-    # If no query, we do a match_all
+    # 1. Base Query Structure
     if not query_text:
         search_query = {"match_all": {}}
+    else:
+        # HYBRID SEARCH: Semantic (E5) + Keyword (BM25)
+        search_query = {
+            "bool": {
+                "should": [
+                    {
+                        "semantic": {
+                            "field": "content",
+                            "query": query_text,
+                            "boost": 2.0  # High weight on semantic understanding
+                        }
+                    },
+                    {
+                        "multi_match": {
+                            "query": query_text,
+                            "fields": ["title^5", "original_title^5"], # Direct keyword boost
+                            "type": "best_fields"
+                        }
+                    }
+                ]
+            }
+        }
 
-    # Add filters (Language, Category)
+    # 2. Add filters (Language, Category)
     filters = []
     if lang_filter:
         filters.append({"term": {"language": lang_filter}})
     if cat_filter:
         filters.append({"term": {"category": cat_filter}})
 
-    if filters:
-        body = {
-            "query": {
-                "bool": {
-                    "must": [search_query] if query_text else [],
-                    "filter": filters,
-                    "should": [search_query] if not query_text else [] # fallback
-                }
+    body = {
+        "query": {
+            "bool": {
+                "must": [search_query] if query_text else [{"match_all": {}}],
+                "filter": filters
             }
-        }
-        if not query_text:
-             body["query"]["bool"]["must"] = {"match_all": {}}
-    else:
-        body = {"query": search_query}
+        },
+        "size": 30 # Increased for better reach
+    }
 
     try:
-        # Increase size for scale testing
-        resp = es.search(index=INDEX_NAME, body=body, size=20)
+        resp = es.search(index=INDEX_NAME, body=body)
         results = []
         for hit in resp['hits']['hits']:
             results.append({
