@@ -213,6 +213,7 @@ HTML_TEMPLATE = """
                 <div class="filter-item active" onclick="setCat(null, this)">All Content</div>
                 <div class="filter-item" onclick="setCat('Parallel Ground Truth', this)">Ground Truth (Parallel)</div>
                 <div class="filter-item" onclick="setCat('Background Noise', this)">Background Noise</div>
+                <div class="filter-item" onclick="setCat('Protocol', this)">Internal Protocols</div>
             </div>
         </div>
         <div class="filter-section">
